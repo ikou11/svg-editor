@@ -1,22 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { Editor } from "../../src/app/Editor.js";
-import { FileStore } from "../../src/io/FileStore.js";
-import { SvgError } from "../../src/model/SvgError.js";
-
-class MemoryFiles extends FileStore {
-  readonly files = new Map<string, string>();
-  override read(path: string): string {
-    const content = this.files.get(path);
-    if (content === undefined) throw new SvgError(`cannot read file: ${path}`);
-    return content;
-  }
-  override write(path: string, content: string): void {
-    this.files.set(path, content);
-  }
-}
+import { MemoryFileStore } from "../support/MemoryFileStore.js";
 
 function setup() {
-  const files = new MemoryFiles();
+  const files = new MemoryFileStore();
   const editor = new Editor({ fileStore: files });
   return { files, editor };
 }

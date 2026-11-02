@@ -1,1 +1,3 @@
-console.log("svg-editor 0.1 — type 'help' for commands");
+import { CliApplication } from "./CliApplication.js";
+
+await CliApplication.create().start(process.stdin, process.stdout);
