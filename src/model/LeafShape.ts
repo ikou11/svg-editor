@@ -63,6 +63,10 @@ export abstract class LeafShape extends Shape {
     for (const key of this.yKeys) this.geometry.set(key, this.num(key) + dy);
   }
 
+  override anchor(): readonly [number, number] {
+    return [this.num(this.xKeys[0]!), this.num(this.yKeys[0]!)];
+  }
+
   protected override applyScale(factor: number): void {
     this.geometry.forEach((v, k) => this.geometry.set(k, v * factor));
   }

@@ -62,6 +62,11 @@ export class Document {
     return container;
   }
 
+  /** 反馈信息中的容器名：根容器显示为 svg，其余为 tag#id。 */
+  labelOf(container: Group): string {
+    return container === this.root ? "svg" : container.label();
+  }
+
   /** id 冲突检查；读入外部文件之外，所有新建图形都要先过这里。 */
   assertIdFree(id: string): void {
     if (this.has(id)) throw new SvgError(`id already exists: ${id}`);

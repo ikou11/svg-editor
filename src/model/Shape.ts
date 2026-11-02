@@ -64,6 +64,11 @@ export abstract class Shape {
 
   abstract move(dx: number, dy: number): void;
 
+  /** 叶子的定位点 (x,y)，用于 "moved to (x,y)" 反馈；容器没有单一位置，返回 null。 */
+  anchor(): readonly [number, number] | null {
+    return null;
+  }
+
   scale(factor: number): void {
     if (!(factor > 0)) throw new SvgError("scale factor must be positive");
     this.applyScale(factor);
