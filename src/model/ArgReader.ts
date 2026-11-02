@@ -24,6 +24,13 @@ export class ArgReader {
     return this.pos < this.args.length ? this.args[this.pos++] : undefined;
   }
 
+  /** 取走剩余的全部参数（变长参数列表，如 group 的 id 列表）。 */
+  rest(): string[] {
+    const remaining = this.args.slice(this.pos);
+    this.pos = this.args.length;
+    return remaining;
+  }
+
   /** 所有参数都读完后调用，多余参数视为用法错误。 */
   finish(): void {
     if (this.pos < this.args.length) throw new SvgError(`usage: ${this.usage}`);
