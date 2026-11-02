@@ -105,6 +105,6 @@ describe("Group (Composite)", () => {
   });
 
   it("rejects ids containing whitespace", () => {
-    expect(() => new Group("bad id")).toThrow("invalid id: bad id");
+    expect(() => new Group("bad id")).toThrow(`invalid id: "bad id"`);
   });
 });

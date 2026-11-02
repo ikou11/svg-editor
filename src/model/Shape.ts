@@ -7,7 +7,7 @@ export abstract class Shape {
   private owner: Group | null = null;
 
   protected constructor(readonly id: string) {
-    if (!/^\S+$/.test(id)) throw new SvgError(`invalid id: ${id}`);
+    if (!/^\S+$/.test(id)) throw new SvgError(`invalid id: "${id}"`);
   }
 
   abstract get tag(): string;
