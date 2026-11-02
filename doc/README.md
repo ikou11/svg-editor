@@ -1,16 +1,8 @@
 # Lab1 Phase 1：SVG 编辑器（CLI）
 
-> **Git 仓库地址：<https://github.com/ikou11/svg-editor>**
-> 最终提交 tag：`final`
+Git 仓库地址：<https://github.com/ikou11/svg-editor>（最终提交打了 tag `final`）
 
-技术栈：TypeScript（strict）+ 面向对象；运行时依赖为零，开发依赖为 `typescript` / `tsx` / `vitest`。
-
-```bash
-npm install
-npm run cli       # 启动 REPL，提示符 svg>
-npm test          # 运行全部测试
-npm run typecheck # 类型检查
-```
+用 TypeScript 写的命令行 SVG 编辑器，`npm run cli` 启动。开发时用 Claude Code 协作，代码是分步提交的。
 
 ---
 
@@ -18,24 +10,15 @@ npm run typecheck # 类型检查
 
 ### 1.1 模块划分
 
-```
-src/
-├── model/     图形领域模型（Composite）
-├── command/   编辑命令与撤销重做（Command）
-├── io/        SVG 文件的序列化 / 解析 / 读写
-├── app/       应用层：Editor（当前文档 + 历史 + io 锁）
-└── cli/       命令行界面：REPL、命令分发、文本渲染
-```
+代码放在 `src/` 下，分成 5 个目录：
 
-| 模块 | 职责 | 主要类（一类一文件，文件名 = 类名） |
-|---|---|---|
-| `model` | 文档与图形树。不知道命令、文件、终端的存在。图形自己负责几何操作（move/scale/set）、快照（memento）与自描述（标签名、属性、tree 中的摘要）。 | `Shape`（抽象组件）、`LeafShape`、`Rect`、`Circle`、`Ellipse`、`Line`、`Text`、`Group`（容器）、`Document`（画布 + 根容器 + 查找）、`ShapeFactory`（类型名→创建函数注册表）、`Style`、`SvgAttrs`、`ArgReader`、`NumberFormat`、`SvgError`、`ShapeMemento` |
-| `command` | 每个编辑动作是一个可执行、可撤销的对象；`History` 管理两个栈。命令只依赖 `model`。 | `Command`（接口）、`History`、`CreateCommand`、`DeleteCommand`、`ShapeMutationCommand`（模板基类）→ `MoveCommand` / `ScaleCommand` / `SetCommand`、`GroupCommand`、`UngroupCommand`、`AddToCommand`、`ZOrderCommand` |
-| `io` | 文档 ↔ SVG 文本。`SvgWriter` 只读 `Shape` 的自描述接口；`SvgReader` 经 `ShapeFactory` 构造图形，缺 id 时补 id 并产生警告。 | `SvgWriter`、`SvgReader`、`SvgReadSession`、`XmlParser`、`XmlNode`、`FileStore`（隔离 `fs`） |
-| `app` | 应用门面：持有当前 `Document`、`History`、"io 命令后禁止 undo"标志；把界面层请求翻译成 `Command`。 | `Editor` |
-| `cli` | 唯一接触终端的模块：读行、切分参数、按命令名分派、渲染输出。 | `Repl`、`ReplSession`、`LineTokenizer`、`CommandInterpreter`、`CommandRegistry`、`CliCommand`（抽象）及 `XxxCliCommand` 各命令、`TreeRenderer`、`ShowRenderer`、`CliApplication`（装配）、`main.ts`（入口） |
-
-组件图：
+| 模块 | 职责 |
+|---|---|
+| `model` | 图形和文档本身：`Shape`（抽象）、`LeafShape`、`Rect`/`Circle`/`Ellipse`/`Line`/`Text`、容器 `Group`、`Document`（画布尺寸 + 根容器 + 按 id 查找）、`ShapeFactory`，还有 `Style`、`SvgAttrs`、`ArgReader`、`NumberFormat`、`SvgError`、`ShapeMemento` 几个小类。图形自己负责 move/scale/set，自己说明属性怎么显示（给 tree 和保存用）。这个模块不知道命令、文件、终端。 |
+| `command` | 所有可撤销的编辑：`Command` 接口、`History`（undo/redo 两个栈）和 create/delete/move/scale/set/group/ungroup/addto/front/back 对应的命令类。只依赖 `model`。 |
+| `io` | SVG 文件的读写：`SvgWriter`（文档转文本）、`SvgReader`（文本转文档，缺 id 时补 id 并产生警告）、`XmlParser`、`FileStore`（唯一碰文件系统的地方）。 |
+| `app` | `Editor`：保存当前文档、undo 历史和"io 命令之后不能 undo"这个状态，把界面传来的请求变成 `Command` 去执行。 |
+| `cli` | 命令行界面：读一行输入、拆参数、按命令名找到对应的命令类、把结果打印成作业要求的格式（`tree`、`show` 的渲染也在这里）。 |
 
 ```plantuml
 @startuml
@@ -57,7 +40,32 @@ io --> model
 @enduml
 ```
 
-核心类图（Composite + Command）：
+### 1.2 设计模式的选择
+
+**Command 模式（作业要求）。** 每个编辑命令是一个类，实现 `Command` 接口的 `execute()` 和 `undo()`，两个方法都返回一行给用户看的提示。具体做法：
+
+- 命令在**构造时就做完所有检查**（id 是否存在、`in` 的目标是不是容器等），不合法直接抛错，这样失败时文档不会被改动，也不会进入 undo 栈。`execute`/`undo` 里只做状态修改。
+- `History` 有 undo 栈和 redo 栈。执行新命令时清空 redo 栈；redo 就是把命令再 `execute` 一次。
+- `group g1 a b c` 是一个 `GroupCommand`，所以撤销一次就全部还原，满足"一条编辑命令 = 一个 undo 单元"。
+- `DeleteCommand` 记下原来的父容器和下标，撤销时放回原位。
+- `document` 类命令（init/read/save/canvas 改尺寸）不走 Command，由 `Editor` 用一个标志位记录"刚执行过 io 命令"，这时 undo/redo 报错，下一条编辑命令成功后解除。
+
+**Composite 模式。** `Shape` 是统一接口，叶子图形继承 `LeafShape`，`Group` 是容器并持有子节点。`move`/`scale`/`set` 在 `Group` 里递归到子节点，所以命令类里不需要判断是容器还是叶子。
+
+**Memento（快照）。** move/scale/set 三个命令共用基类 `ShapeMutationCommand`：执行前让图形给自己拍快照，撤销时直接还原。没有用"反向操作"（比如 scale 的撤销再乘 1/f），因为浮点数乘回去不一定等于原值。
+
+**Factory（注册制）。** `ShapeFactory` 里是一张"类型名 → 创建函数"的表，不是 `switch`。`create box` 因为没注册，会报 `unknown shape type`。
+
+**Facade。** cli 只和 `Editor` 打交道，不直接创建 `Command`，也不直接读写文件。
+
+**序列化和 tree 的实现方式。** 没有用 Visitor，而是让每个图形自己提供 `tag`、`svgAttributes()`、`describe()` 等方法，`SvgWriter` 和 `TreeRenderer` 只调这些方法。原因是下一阶段要加 `box` 插件，如果用 Visitor，每加一种图形都得改访问者接口。
+
+**按名字分派的两处（待重构）：**
+
+1. 命令分发：`cli/CommandRegistry` 里 `命令名 → CliCommand` 的表。待重构：让命令自己描述并自动注册，help 由注册信息生成。
+2. 图形工厂：`model/ShapeFactory` 里 `类型名 → 创建函数`的表（同时存了读 SVG 时用的函数）。待重构：下一阶段改成 `ShapeProvider` 插件接口。
+
+除了这两处，代码里没有 `switch`，也没有按图形类型做 `instanceof`（用测试检查，见后文）。
 
 ```plantuml
 @startuml
@@ -65,7 +73,7 @@ abstract class Shape {
   id; parent
   move(dx, dy); scale(f)
   get(attr); set(attr, v)
-  memento(): ShapeMemento
+  memento()
   describe(); svgAttributes()
 }
 abstract class LeafShape
@@ -93,104 +101,72 @@ ShapeMutationCommand <|-- MoveCommand
 ShapeMutationCommand <|-- ScaleCommand
 ShapeMutationCommand <|-- SetCommand
 History o-- Command
-
-class Editor
 Editor --> History
-Editor ..> Command : 构造
+Editor ..> Command : 创建
 @enduml
 ```
 
-### 1.2 设计模式的选择与落地
-
-| 模式 | 用在哪 | 落地方式 |
-|---|---|---|
-| **Command（必须）** | 所有编辑命令的执行与撤销 | `Command` 接口：`execute()` / `undo()`，各返回一行用户反馈。命令在**构造时完成全部校验**（失败即抛 `SvgError`，文档不受影响），`execute`/`undo` 只做状态变更。`History` 持有 undo / redo 两个栈，`run()` 新命令时清空 redo 栈；redo 即再次 `execute`。`group g1 a b c` 是单个 `GroupCommand`，天然是一个 undo 单元。`delete` 记录原父容器与原下标，撤销时放回原位。 |
-| **Memento** | 撤销"改属性"类命令 | `Shape.memento()` 返回可还原几何/样式/文本的快照；`ShapeMutationCommand`（Template Method）执行前取快照、撤销时整体还原。不用"反向运算"（如 `scale 1/f`），避免浮点误差。 |
-| **Composite** | 图形树 | `Shape` 为抽象组件，`LeafShape` 为叶子，`Group` 为容器。`move/scale/set/memento` 在 `Group` 中递归子节点，所以命令类里没有任何容器/叶子判断。 |
-| **Factory（注册制）** | 按类型名创建图形 | `ShapeFactory` 内部是 `Map<类型名, 创建函数 + SVG 读取函数>`，通过 `register()` 加入，不是 `switch`。 |
-| **自描述（替代 Visitor / switch）** | 序列化与 tree/show | `Shape` 提供 `tag`、`svgAttributes()`、`textContent()`、`describe()` 等多态方法，`SvgWriter` / `TreeRenderer` / `ShowRenderer` 只调用它们。不选 Visitor，是因为 Visitor 每新增一种图形就要改访问者接口，与下阶段"插件新增 `box`、内核改动为 0"冲突。 |
-| **Facade** | `Editor` | cli 只和 `Editor` 打交道，不直接创建 `Command`、不碰文件。 |
-
-**按名字分派的位置（作业要求只允许两处，均为待重构项）：**
-
-1. **命令分发**：`cli/CommandRegistry` 中 `命令名 → CliCommand`。*待重构*：命令自描述并自动注册，help 由注册信息生成。
-2. **图形工厂**：`model/ShapeFactory` 中 `类型名 → 创建/读取函数`。*待重构*：下阶段升级为 `ShapeProvider` 插件接口（类型名 + 参数 schema + 序列化标记 + 读回还原）。
-
-这一点由 `test/architecture/ArchitectureRules.test.ts` 自动检查：除这两个文件外，不允许出现以名字为键的分派表，也不允许出现 `switch` 或对图形类型的 `instanceof`。
-
 ### 1.3 依赖方向规则
+
+允许的依赖：
 
 ```
 cli ──> app ──> command ──> model
          │                    ▲
          └──────> io ─────────┘
-cli ──> model（只读渲染 + 参数/错误工具）
+cli ──> model（只读渲染、参数解析、错误类型）
 ```
 
 | 规则 | 理由 |
 |---|---|
-| `model` **不依赖任何其他模块** | 领域核心可独立测试、复用；图形不应知道命令、文件格式或终端。 |
-| `command` 只依赖 `model` | 命令是对模型的操作，不关心输入来自 CLI 还是别的界面，也不读写文件。 |
-| `io` 只依赖 `model` | 文件格式是模型的外部表示；换格式不应触及命令或界面。`io` 与 `command` **互不依赖**。 |
-| `app` 可依赖 `command`、`io`、`model`，**不依赖 `cli`** | `app` 是不含终端细节的应用核心，可被别的界面复用。 |
-| `cli` 依赖 `app` 与 `model`；**不得依赖 `command` / `io`，不得直接使用 `fs`** | 最外层。必须经 `Editor` 间接创建命令与读写文件。 |
-| 内层不得依赖外层；模块间**无循环依赖**；只有 `io/FileStore` 使用 `fs`，只有 `cli/Repl`、`cli/main` 接触终端 | 变更方向单一，便于抽样检查。 |
+| `model` 不依赖任何其他模块 | 图形和文档是核心，应该能单独测试，也不该知道命令、文件格式或终端。 |
+| `command` 只依赖 `model` | 命令只是对模型的操作，不管输入从哪来，也不读写文件。 |
+| `io` 只依赖 `model`，和 `command` 互相不依赖 | 文件格式只是模型的一种外部表示，换格式不应该影响命令和界面。 |
+| `app` 可以依赖 `command`、`io`、`model`，不能依赖 `cli` | `app` 里没有终端相关的东西，以后换别的界面可以直接复用。 |
+| `cli` 只依赖 `app` 和 `model`，不能依赖 `command`、`io`，也不能直接用 `fs` | `cli` 在最外层，必须通过 `Editor` 间接创建命令、读写文件。 |
+| 不允许内层依赖外层，不允许循环依赖 | 依赖方向单一，改动的影响范围好判断。 |
 
-以上规则全部由 `ArchitectureRules.test.ts` 自动检查（读取所有 `src` 文件的 import 语句）。检查本身经过变异验证：往 `model` 里人为加一条指向 `cli` 的 import，测试会失败（见"过程记录"）。
+违反这些规则的依赖就算待处理项。这些规则我写成了测试（`test/architecture/ArchitectureRules.test.ts`），会扫描 `src` 下所有文件的 import 语句。
 
 ### 1.4 变化点假设
 
-| # | 最可能的变化 | 为它留了什么 | 或：为何不留 |
-|---|---|---|---|
-| 1 | **新增图形类型**（下阶段 `box` 复合图形，由插件提供） | `ShapeFactory` 注册制（同时注册创建函数与 SVG 读取函数）+ `Shape` 自描述接口；命令、序列化、tree 渲染都不按类型分支。下阶段把工厂升级为 `ShapeProvider` 即可。尚缺的钩子（`ungroup` 拒绝复合图形、`set` 传播语义、tree 类型标注）在 §5 列为已知缺口。 | — |
-| 2 | **新增编辑命令** | `Command` 接口 + `CommandRegistry` 注册；新增一个命令类并注册即可。 | — |
-| 3 | **文件格式变化**（如改存 JSON） | `io` 模块独立；`Editor` 只依赖 `SvgReader` / `SvgWriter` / `FileStore` 的窄接口。 | — |
-| 4 | **用户界面变化**（GUI / 脚本 / agent 调用） | `app.Editor` 不含终端细节，CLI 只是它的一个前端。 | — |
-| 5 | **更精细的 undo 粒度**（如命令合并） | `History` 以 `Command` 为单位，新命令类可在内部组合多步。 | 原计划的 `CompositeCommand` 未实现：当前所有多步操作（group 等）都能放进单个命令类，提前抽象没有使用者。 |
-| 6 | **图形增加样式属性**（opacity 等） | 样式集中在 `Style` 类，增加属性只改这一个类的白名单。 | 不做通用属性包：作业只要求 fill/stroke/stroke-width，万能 `Map` 会削弱封装。 |
-| 7 | **按路径（XPath 式）寻址图形** | 暂不留。 | 作业明确本阶段只用 id；若需要，只影响 cli 解析层与 `Document` 的查找方法。 |
-| 8 | **读入更多 SVG 元素**（path、transform 等） | 读入时遇到不支持的元素给出警告并跳过，不会静默丢失。 | 不做：超出作业范围，且需要新增图形类型。 |
-
-### 1.5 作业中未明确、由我自行决定的行为
-
-| 情形 | 决定 |
-|---|---|
-| `group` 新容器的位置与子节点顺序 | 新容器放在"文档顺序最靠前的成员"原来的位置；子节点保持文档顺序，与命令行参数顺序无关。 |
-| 对 `g` 执行 `set` | 只接受 `fill` / `stroke` / `stroke-width`，并应用到所有子孙；对容器设几何属性报 `unknown attribute`。 |
-| `line` 的颜色参数 | 对应 `stroke`（line 没有填充）。`tree` 中 line 的摘要不显示 stroke，与示例一致。 |
-| tree 的属性列对齐 | 全树属性列对齐，位置 = 最宽"前缀+标签"+2 个空格。该规则精确重现 §5.1 与 §6 的示例；§6.1 示例中手工对齐前后不一致，对应的回放测试忽略连续空格的差异。 |
-| 读入不支持的元素 / `<g transform>` | 打印 `warning: skipped unsupported <path>` / `warning: ignored transform on ...`，继续读入。 |
-| `init` / `canvas` 只给一个参数 | 宽度生效，高度取默认值 / 保持当前值。 |
-| `save` 无参数且从未 read/save | `error: no file path. use 'save <file>'`；`save <file>` 之后该路径成为新的默认路径。 |
-| 空栈时 undo / redo | `error: nothing to undo` / `error: nothing to redo`。 |
-| 额外命令 | `exit`（退出 REPL）。 |
+| # | 我觉得可能变化的地方 | 为它留了什么（或为什么不留） |
+|---|---|---|
+| 1 | 新增图形类型（下阶段的 `box`，由插件提供） | `ShapeFactory` 用注册表，命令、保存、tree 都不按类型分支，下阶段把工厂升级成 `ShapeProvider` 就行。`box` 还需要的几个口子（`ungroup` 拒绝复合图形、`set` 把 fill 转发给子图形、tree 里标注类型、保存读回 `data-kind`）这一阶段没做。 |
+| 2 | 新增编辑命令 | 加一个 `Command` 类 + 一个 `CliCommand` 类并在 `CommandRegistry` 注册即可。 |
+| 3 | 文件格式变化（比如改存 JSON） | 读写都在 `io` 里，`Editor` 只依赖 `SvgReader`/`SvgWriter`/`FileStore`。 |
+| 4 | 界面变化（GUI、脚本、agent 调用） | `Editor` 不含终端细节，CLI 只是它的一个前端。 |
+| 5 | 更细的 undo 粒度（比如合并命令） | 原来想做一个 `CompositeCommand`，后来没做：现在所有多步操作（group 等）都能放进一个命令类里，提前抽象出来没有人用。 |
+| 6 | 图形增加样式属性（opacity 之类） | 样式集中在 `Style` 一个类里，加属性只改这里。没有做"通用属性 Map"，作业只要求 fill/stroke/stroke-width，太通用会破坏封装。 |
+| 7 | 用路径（类似 XPath）寻址图形 | 不留。作业说本阶段只用 id；真要加的话只影响 cli 的解析和 `Document` 的查找。 |
+| 8 | 读入更多 SVG 元素（path、transform 等） | 不做。读到不支持的元素时打印 `warning` 并跳过，不会悄悄丢掉。 |
 
 ---
 
 ## 2. 过程记录
 
-> 以下是开发中实际发生的、我认为有代表性的问题与迭代；每条都有对应的修复和验证。
+下面是开发过程中比较有代表性的几次问题和调整。
 
-**① 设计阶段比较了 Visitor 与"图形自描述"，选了后者。**
-序列化和 tree 渲染最常见的做法是 Visitor。但对照"下阶段 `box` 插件、内核新增 0 行"的目标，Visitor 每新增一种图形都要修改访问者接口，与目标冲突。因此让 `Shape` 自描述（`svgAttributes()`、`describe()`、`textContent()`），渲染器只调用多态方法。第 1.2 节记录了这个取舍，`ArchitectureRules` 测试保证代码里没有按类型分支。
+**1. 先讨论 Visitor 还是自描述。** 一开始想到 tree 渲染和保存可以用 Visitor，但想到下阶段要加 `box` 插件、要求内核不改，Visitor 每多一种图形就要改访问者接口，所以改成让图形自己提供描述方法。这是在写代码之前定下来的，写进了架构方案。
 
-**② 撤销用快照而不是反向运算（设计时预判，并用测试固定）。**
-`scale` 的撤销若做 `scale(1/f)`，`scale 0.1` 再 `scale 10` 在浮点下不会回到原值。所以一开始就采用 Memento：执行前取快照，撤销时直接还原。这是预判而非实际踩坑；测试 `scales a container recursively and undo restores exact values` 用 `0.1` 因子把它固定下来。
+**2. undo 用快照，不用反向操作。** 设计时就想到 scale 的撤销如果写成再乘 1/f，浮点数可能回不到原值，所以直接让图形拍快照。这个问题没有实际出现过，是提前想到的，但写了一个用 0.1 做缩放因子的测试来保证 undo 后的值和原来完全一样。
 
-**③ 一次提交时类型检查其实是失败的，是我的流程有漏洞。**
-我用 `npm run typecheck | tail` 看结果，管道使得整条命令的退出码来自 `tail`，于是 `&&` 之后的 `git commit` 照常执行——`GroupCommand` 里一个未使用的字段 `doc` 报了 TS6138，却被提交了。发现后修复并重写了那个尚未推送的提交，此后检查类型时不再经过管道。教训：**验证命令的退出码不能被管道吞掉。**
+**3. AI 提交了一个类型检查没通过的版本。** 写 `GroupCommand` 时 `tsc` 其实报了"属性 doc 声明了但没用"，但 AI 是用 `npm run typecheck | tail` 看结果的，管道让整条命令的退出码变成了 `tail` 的，所以后面的 `git commit` 照常执行了。我们发现之后把字段去掉，用 `git commit --amend` 修正了那个还没推送的提交。之后检查类型不再经过管道。
 
-**④ 批量重命名没有生效，但测试照样通过。**
-把 cli 命令类统一改名为 `XxxCliCommand` 时，我用了 `sed 's/\bInitCommand\b/.../'`。macOS 自带的 BSD `sed` 不支持 `\b`，所以文件改名了、类名没改。更隐蔽的是，改名后测试仍然全绿（旧类名在文件内部一致）。是随后 `grep "class .*Command"` 看到文件名与类名不一致才发现，改用 `perl -pe` 重做，并由 `ArchitectureRules` 里的"一类一文件、文件名=类名"检查兜底。
+**4. 批量重命名没生效，但测试还是全绿。** 把 cli 的命令类统一改成 `XxxCliCommand` 时，AI 用了 `sed 's/\bInitCommand\b/.../'`，但 macOS 的 `sed` 不支持 `\b`，结果文件名改了而类名没变。因为文件内部的名字前后一致，测试也都通过，没有任何报错。后来用 `grep "class .*Command"` 发现文件名和类名对不上才看出来，改用 `perl` 重做。这之后我让"一类一文件、文件名等于类名"也进了架构检查测试。
 
-**⑤ 架构检查测试本身有漏洞，是靠"变异验证"发现的。**
-写完 `ArchitectureRules.test.ts` 全部通过后，我没有直接相信它：往 `src/model/SvgError.ts` 人为追加一行 `import "../cli/Repl.js"`（一条违反依赖规则的副作用 import），测试**依然全绿**。原因是正则只匹配了 `from "../x/` 形式。改为匹配所有以 `"../` 开头的字符串后，同样的注入会让测试失败，然后还原注入。教训：**一个从未失败过的检查，不能说明它有用。**
+**5. 架构检查测试自己有漏洞。** 写完 `ArchitectureRules` 测试后全部通过，我不想直接相信它，就在 `src/model/SvgError.ts` 里手动加了一行 `import "../cli/Repl.js"`（违反依赖规则），结果测试还是通过——因为正则只匹配了 `from "../xxx/` 这种写法，漏了没有 `from` 的 import。改成匹配所有以 `"../` 开头的字符串后，同样的违规会让测试失败，然后我把那行删掉。
 
-**⑥ 作业示例之间自相矛盾，需要先判断哪个是规则、哪个是笔误。**
-§5.1、§6 的 tree 属性列是全局对齐的，而 §6.1 的树按兄弟节点对齐且间距不一致（`rect#process` 后 5 个空格、`text#process-label` 后 1 个空格）。我选择能精确重现 §5.1 与 §6 的"全树对齐"规则，并在测试里对 §6.1 忽略连续空格，同时在 §1.5 明确记录这个决定。
+**6. 作业里的示例互相不一致。** 5.1 和第 6 节的 tree 属性列是整棵树对齐的，但 6.1 的树是每组兄弟各自对齐，而且空格数也不统一。我按 5.1 和第 6 节的规则实现（属性列位置 = 最长的"前缀+标签"再加 2 个空格），6.1 的验收测试里把连续空格当成一个来比较。
 
-**⑦ 作业未规定的边界，选择"显式告知"而不是静默处理。**
-例如读入 `<path>`、带 `transform` 的 `<g>`：直接丢弃会让用户以为文件被完整读入。改为打印 `warning:` 并跳过，列入 §1.5。
+**7. 作业没规定的地方，自己定了规则。**
+
+- `group` 的新容器放在"文档顺序最靠前的那个成员"原来的位置，子节点保持文档顺序，和命令里写的参数顺序无关。
+- 对 `g` 执行 `set` 只接受 `fill`/`stroke`/`stroke-width`，并应用到所有子孙；设几何属性报 `unknown attribute`。
+- `line` 的颜色参数对应 `stroke`，tree 里 line 那一行不显示 stroke（和示例一致）。
+- 读入不支持的元素（如 `<path>`）、带 `transform` 的 `<g>` 时，打印 `warning` 并继续。
+- `init`/`canvas` 只给一个参数时，宽度生效，高度取默认值或保持不变。
+- undo/redo 栈为空时报 `nothing to undo` / `nothing to redo`；另外加了一个 `exit` 命令退出。
 
 ---
 
@@ -198,71 +174,50 @@ cli ──> model（只读渲染 + 参数/错误工具）
 
 ### 3.1 模块划分：实际目录与方案是否一致？
 
-**目录一致**：`src/` 下就是 `model` / `command` / `io` / `app` / `cli` 五个模块，职责与 §1.1 一致（测试 `every src directory is a declared module` 保证不会悄悄多出模块）。
+目录是一致的：`src/` 下就是 `model`、`command`、`io`、`app`、`cli` 五个目录，每个模块的职责和 1.1 里写的相同。不一致的是模块里具体有哪些类，和最初的方案相比有下面这些变化，都记在了修订记录里：
 
-**类的差异**（方案初稿 → 实际），均已记入下方修订记录：
-
-| 位置 | 方案初稿 | 实际 | 原因 |
-|---|---|---|---|
-| `command` | 含 `CompositeCommand` | **未实现** | `group` 本身是单个命令，没有使用者 |
-| `command` | — | 新增 `ShapeMutationCommand` | move/scale/set 共用"快照→变更→还原"模板 |
-| `io` | `SvgWriter` `SvgReader` `FileStore` | 新增 `XmlParser` `XmlNode` `SvgReadSession` | 不引入第三方 XML 库；读入过程的状态（已用 id、编号、警告）单独成类以满足一类一文件 |
-| `model` | `Shape` … `ShapeFactory` | 新增 `Style` `SvgAttrs` `ArgReader` `NumberFormat` `SvgError` `ShapeMemento` | 样式封装、外部属性读取、参数读取、数字格式化、错误类型、快照接口 |
-| `model` | `ShapeFactory`：类型名→创建函数 | 同时登记 **SVG 读取函数** | `SvgReader` 需要按标签名还原图形，而不能自己 `switch` |
-| `cli` | `HelpText` | 由 `HelpCliCommand` 动态生成 | help 直接来自注册表，不会与命令不同步 |
-| `cli` | 命令处理类 | 命名为 `XxxCliCommand`；新增 `CommandInterpreter` `ReplSession` `LineTokenizer` `CliApplication` | 避免与 `command` 模块同名；解释器与 I/O 分离以便测试 |
+| 序号 | 变化 | 原因 |
+|---|---|---|
+| R1 | 取消了计划中的 `CompositeCommand` | group 本身就是一个命令，没有地方用它 |
+| R2 | `command` 新增 `ShapeMutationCommand` | move/scale/set 共用"拍快照 → 修改 → 还原"的流程 |
+| R3 | `io` 新增 `XmlParser`、`XmlNode`、`SvgReadSession` | 不想引入第三方 XML 库；读入时的状态（已用 id、自动编号、警告）单独成类，保证一类一文件 |
+| R4 | `model` 新增 `Style`、`SvgAttrs`、`ArgReader`、`NumberFormat`、`SvgError`、`ShapeMemento` | 分别用来封装样式、读外部属性、解析命令参数、格式化数字、表示用户错误、表示快照 |
+| R5 | `ShapeFactory` 里除了创建函数，还登记了"从 SVG 属性构造图形"的函数 | `SvgReader` 读文件时要按标签名创建图形，自己写 `switch` 就多了一个分派点 |
+| R6 | cli 的命令类命名为 `XxxCliCommand`；新增 `CommandInterpreter`、`ReplSession`、`LineTokenizer`、`CliApplication`；用 `HelpCliCommand` 代替原来的 `HelpText` | 避免和 `command` 模块里的类重名；把解释器和终端读写分开以便测试；help 内容直接来自注册表，不会和命令列表不同步 |
+| R7 | 1.3 里"cli 依赖 model"从"只读渲染"改成"只读渲染、参数解析、错误类型" | 见 3.2 |
 
 ### 3.2 依赖方向：方案里的规则有没有被违反？
 
-**没有违反**，并且不是靠抽样口头确认，而是由 `ArchitectureRules.test.ts` 对**全部** `src` 文件检查：
+没有违反。我用 `ArchitectureRules.test.ts` 检查了 `src` 下全部文件（不是只抽样）：每个模块 import 的目标都在 1.3 允许的范围内、模块之间没有环、`cli` 没有 import `command` 和 `io`、只有 `io/FileStore` 用了 `fs`、只有 `cli/Repl` 和 `cli/main` 接触终端。
 
-- 各模块的 import 目标都在 §1.3 的允许范围内；模块图无环；
-- `cli` 不 import `command` / `io`，不使用 `fs`；只有 `io/FileStore` 使用 `fs`，只有 `cli/Repl`、`cli/main` 接触终端；
-- 一类一文件且文件名=类名；没有 `switch`；`instanceof` 只用于异常类型；
-- 以名字为键的分派表只存在于 `CommandRegistry` 与 `ShapeFactory`。
+另外我自己也看了一下 import 的统计：`model` 没有跨模块 import；`command` 和 `io` 都只指向 `model`；`app` 指向 `command`、`io`、`model`；`cli` 指向 `app` 和 `model`。
 
-另外手工抽样了 import 统计：`model` 0 条跨模块 import；`command` 只指向 `model`（31 条）；`io` 只指向 `model`（13 条）；`app` 指向 `command` / `io` / `model`；`cli` 指向 `app`（19 条）与 `model`（9 条）。
+有一点和最初方案不完全一样：方案写的是 `cli` 对 `model` 只读渲染，但实际上 `cli` 还用了 `model` 里的 `ArgReader`（解析参数）和 `SvgError`（错误类型）。它们是没有状态的小工具，不会让 `cli` 绕过 `Editor` 去改文档，所以我认为可以接受，并把 1.3 的说法改了（R7）。如果要更严格，可以把这两个类放到单独的 `shared` 模块里。
 
-**一处需说明的偏差**：初稿把 `cli → model` 限定为"只读渲染"。实际上 `cli` 还从 `model` 引用了 `ArgReader`（参数解析）和 `SvgError`（错误类型），共 5 处。它们是无状态的工具/类型，不会让 `cli` 绕过 `Editor` 修改文档，因此判定为可接受，已在 §1.3 把规则表述改为"只读渲染 + 参数/错误工具"。若要更严格，可把这两个类移到独立的 `shared` 模块（见下节"待处理项"）。
+目前留着的待处理项：
 
-### 3.3 已知缺口与待处理项
-
-- 按名字分派的两处（`CommandRegistry`、`ShapeFactory`）按作业要求保留，待下阶段重构为自描述注册 / `ShapeProvider`。
-- 为 `box` 插件还缺的内核钩子：`ungroup` 对复合图形报 `cannot ungroup composite shape`、`set` 的传播语义、tree 中的类型标注 `g#n1 (box)`、`data-kind` 的写出与读回。本阶段按作业要求不实现，`create box` 报 `unknown shape type`。
-- `cli → model` 的工具依赖（`ArgReader`、`SvgError`）可考虑抽出 `shared` 模块。
-- `Document` 以遍历方式按 id 查找（O(n)），对作业规模足够；若图形数量很大，可在 `Document` 内部加索引而不影响其他模块。
-
-### 修订记录
-
-| 序号 | 变更 | 原因 |
-|---|---|---|
-| R1 | 取消 `CompositeCommand` | 无使用者，见 §1.4 #5 |
-| R2 | 新增 `ShapeMutationCommand` | 三个命令共用快照模板 |
-| R3 | `io` 新增 `XmlParser` / `XmlNode` / `SvgReadSession` | 零第三方依赖；一类一文件 |
-| R4 | `model` 新增 `Style` / `SvgAttrs` / `ArgReader` / `NumberFormat` / `SvgError` / `ShapeMemento` | 封装与复用 |
-| R5 | `ShapeFactory` 增加 SVG 读取函数登记 | 读回文件时按标签还原图形，避免新增分派点 |
-| R6 | cli 命令类改名为 `XxxCliCommand`，新增 `CommandInterpreter` / `ReplSession` / `LineTokenizer` / `CliApplication`，用 `HelpCliCommand` 取代 `HelpText` | 命名冲突、可测试性 |
-| R7 | §1.3 中 `cli → model` 表述放宽为"只读渲染 + 参数/错误工具" | 见 §3.2 |
-| R8 | 新增 §1.5「自行决定的行为」 | 作业未规定的边界需显式记录 |
+- 按名字分派的两处（`CommandRegistry`、`ShapeFactory`）按作业要求保留，下阶段重构。
+- `box` 需要的几个口子这一阶段没做（见 1.4 第 1 条）。
+- `Document` 按 id 查找是遍历整棵树，作业规模没问题，图形很多时可以在 `Document` 内部加索引。
 
 ---
 
 ## 4. 质量保证手段
 
-**如何确认功能完整**
+**怎么确认功能是完整的**
 
-1. **逐字回放作业样例**：`test/acceptance/AssignmentTranscripts.test.ts` 把作业 §6（典型会话）、§6.1（两节点流程图）、§5.2（show）里的 transcript 原样回放，逐行比对输出；`other.svg` 读入、警告文案、`undo not allowed after io command` 等都在其中。
-2. **按命令表逐条覆盖**：`init/read/save/canvas`、`create`（六种类型、`in` 子句）、`delete/move/scale/set/group/ungroup/addto/front/back`、`tree/show/help`、`undo/redo` 都有单元测试，每个命令至少覆盖：成功反馈、undo、redo、参数错误、对象不存在。
-3. **逐条覆盖 §4.2 错误表**：`id already exists`、`no such shape`、`no such container`、`not a container`、`unknown shape type`、`cannot group a container into its own descendant`、`cannot ungroup top-level container`、`scale factor must be positive`、`cannot read/write file`、`no document`、`undo not allowed after io command`。`cannot ungroup composite shape` 依赖 `box` 插件，本阶段不适用。
-4. **"失败不改变状态"**：命令在构造时校验；测试验证失败的 `create` / `set` / `read` / `save` 后文档与 undo 栈不变，且失败不会误解锁 undo。
-5. **往返测试**：`write(read(write(doc)))` 与第一次输出完全一致；`SvgWriter` 对背景知识里的 `flow` 示例逐字符输出一致。
-6. **实际运行**：用管道喂入会话脚本运行 `npm run cli`，检查输出与保存出的 SVG 文件；并用边界输入（空 id、缺参数、非数字、嵌套 ungroup、save 后 undo 等）做过手动验证。
+1. 把作业第 6 节（典型会话）、6.1 节（两节点流程图）和 5.2 节（show）里的 transcript 原样回放，一行一行比对输出（`test/acceptance/AssignmentTranscripts.test.ts`）。其中有 `other.svg` 的读入和 `warning: assigned id rect1 ...`，也有 `undo not allowed after io command`。
+2. 按命令表对每个命令都写了测试：成功时的提示、undo、redo、参数错误、对象不存在。`create` 的六种类型和 `in` 子句也都测了。
+3. 作业 4.2 的错误表里每一条都有对应测试（`cannot ungroup composite shape` 要等 `box` 插件，这一阶段没有）。
+4. "失败不改变任何状态"：测试里检查失败的 create/set/read/save 之后文档和 undo 栈都没变，而且失败的编辑不会误把 undo 解锁。
+5. 往返测试：保存、读回、再保存，两次输出的文本完全一样；`SvgWriter` 对背景知识里的 `flow` 示例输出与文档逐字一致。
+6. 用管道输入一段命令脚本，实际运行 `npm run cli`，看输出和保存出来的 SVG 文件；还手动试了一些边界输入（空 id、缺参数、非数字、嵌套 ungroup、save 之后 undo 等）。
 
-**对代码质量的信心来自**
+**对代码质量有信心的依据**
 
-- **自动化架构检查**（见 §3.2）：依赖方向、一类一文件、无 `switch`、分派点唯一；并用"注入违规看测试是否失败"的方式验证过检查本身有效。
-- **TypeScript strict** + `noImplicitOverride` / `noUnusedLocals` / `noUnusedParameters`，`npm run typecheck` 无错误。
-- **测试分层**：model / command / io / app / cli 各自独立测试，另有 acceptance 与 architecture 两层；`npm test` 当前全部通过。
-- **分步提交**：每个模块拆成多个小提交，每次提交前运行类型检查与测试（出现过的一次疏漏见"过程记录 ③"）。
+- 用了 TypeScript 的 strict 模式，另外打开了 `noImplicitOverride`、`noUnusedLocals`、`noUnusedParameters`，`npm run typecheck` 没有报错。
+- 测试按模块分层（model、command、io、app、cli），再加验收测试和架构规则测试，`npm test` 当前全部通过（17 个测试文件，137 个用例）。
+- 架构规则（依赖方向、一类一文件、没有 `switch`、分派点只有两处）都变成了测试，不是只写在文档里。而且我故意加过一条违规的 import 来确认检查真的会失败（见过程记录第 5 条）。
+- 开发是分步提交的，每个模块拆成了好几个小提交，提交前都跑类型检查和测试（过程记录第 3 条是一次漏掉的例外）。
 
-**局限**：没有做覆盖率统计；交互式终端（TTY）下的行编辑未专门测试，主要验证的是管道/脚本输入与解释器层。
+**不足**：没有统计测试覆盖率；交互式终端里的行编辑没有专门测试，主要测的是管道/脚本输入和解释器这一层。
