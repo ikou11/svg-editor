@@ -1,7 +1,7 @@
 import { CliCommand } from "./CliCommand.js";
 import type { ReplSession } from "./ReplSession.js";
 
-export class ExitCommand extends CliCommand {
+export class ExitCliCommand extends CliCommand {
   readonly name = "exit";
   readonly usage = "exit";
   readonly summary = "退出编辑器（也可用 Ctrl-D）";
