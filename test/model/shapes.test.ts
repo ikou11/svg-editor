@@ -3,6 +3,8 @@ import { Circle } from "../../src/model/Circle.js";
 import { Ellipse } from "../../src/model/Ellipse.js";
 import { Line } from "../../src/model/Line.js";
 import { Rect } from "../../src/model/Rect.js";
+import { ShapeFactory } from "../../src/model/ShapeFactory.js";
+import { SvgAttrs } from "../../src/model/SvgAttrs.js";
 import { Text } from "../../src/model/Text.js";
 
 describe("leaf shapes", () => {
@@ -81,5 +83,32 @@ describe("leaf shapes", () => {
     const r = Rect.create("r", ["1", "2", "3", "4"]);
     expect(() => r.set("x", "oops")).toThrow();
     expect(r.get("x")).toBe("1");
+  });
+});
+
+describe("fromSvg", () => {
+  const attrs = (o: Record<string, string>) => new SvgAttrs(new Map(Object.entries(o)));
+
+  it("reads geometry; missing numbers default to 0 and px units are accepted", () => {
+    const r = Rect.fromSvg("r", attrs({ x: "5px", width: "10", height: "20" }));
+    expect(r.describe()).toBe("x=5 y=0 w=10 h=20");
+  });
+
+  it("rejects non-numeric geometry", () => {
+    expect(() => Circle.fromSvg("c", attrs({ r: "big" }))).toThrow("invalid number: big");
+  });
+
+  it("factory applies style attributes after construction", () => {
+    const f = ShapeFactory.withBuiltins();
+    const line = f.fromSvg("line", "l", attrs({ x1: "0", y1: "0", x2: "1", y2: "1", stroke: "red", "stroke-width": "2" }), "");
+    expect(line.get("stroke")).toBe("red");
+    expect(line.get("stroke-width")).toBe("2");
+    expect(f.fromSvg("text", "t", attrs({ x: "1", y: "2" }), "hello").textContent()).toBe("hello");
+  });
+
+  it("factory reports unsupported svg tags", () => {
+    const f = ShapeFactory.withBuiltins();
+    expect(f.supportsSvgTag("path")).toBe(false);
+    expect(f.supportsSvgTag("rect")).toBe(true);
   });
 });

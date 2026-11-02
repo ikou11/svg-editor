@@ -1,5 +1,6 @@
 import { ArgReader } from "./ArgReader.js";
 import { LeafShape } from "./LeafShape.js";
+import type { SvgAttrs } from "./SvgAttrs.js";
 
 export class Circle extends LeafShape {
   protected override readonly xKeys = ["cx"];
@@ -15,6 +16,10 @@ export class Circle extends LeafShape {
     const circle = new Circle(id, reader.number(), reader.number(), reader.number(), reader.optionalText());
     reader.finish();
     return circle;
+  }
+
+  static fromSvg(id: string, attrs: SvgAttrs): Circle {
+    return new Circle(id, attrs.number("cx"), attrs.number("cy"), attrs.number("r"));
   }
 
   override get tag(): string {

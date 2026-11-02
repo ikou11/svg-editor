@@ -1,6 +1,7 @@
 import { ArgReader } from "./ArgReader.js";
 import type { ShapeMemento } from "./ShapeMemento.js";
 import { LeafShape } from "./LeafShape.js";
+import type { SvgAttrs } from "./SvgAttrs.js";
 import { SvgError } from "./SvgError.js";
 
 export class Text extends LeafShape {
@@ -19,6 +20,10 @@ export class Text extends LeafShape {
     const text = new Text(id, reader.number(), reader.number(), reader.text());
     reader.finish();
     return text;
+  }
+
+  static fromSvg(id: string, attrs: SvgAttrs, text: string): Text {
+    return new Text(id, attrs.number("x"), attrs.number("y"), text);
   }
 
   override get tag(): string {

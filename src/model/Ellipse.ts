@@ -1,5 +1,6 @@
 import { ArgReader } from "./ArgReader.js";
 import { LeafShape } from "./LeafShape.js";
+import type { SvgAttrs } from "./SvgAttrs.js";
 
 export class Ellipse extends LeafShape {
   protected override readonly xKeys = ["cx"];
@@ -15,6 +16,10 @@ export class Ellipse extends LeafShape {
     const ellipse = new Ellipse(id, reader.number(), reader.number(), reader.number(), reader.number(), reader.optionalText());
     reader.finish();
     return ellipse;
+  }
+
+  static fromSvg(id: string, attrs: SvgAttrs): Ellipse {
+    return new Ellipse(id, attrs.number("cx"), attrs.number("cy"), attrs.number("rx"), attrs.number("ry"));
   }
 
   override get tag(): string {

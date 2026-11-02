@@ -1,5 +1,6 @@
 import { ArgReader } from "./ArgReader.js";
 import { LeafShape } from "./LeafShape.js";
+import type { SvgAttrs } from "./SvgAttrs.js";
 
 export class Line extends LeafShape {
   protected override readonly xKeys = ["x1", "x2"];
@@ -17,6 +18,10 @@ export class Line extends LeafShape {
     const line = new Line(id, reader.number(), reader.number(), reader.number(), reader.number(), reader.optionalText());
     reader.finish();
     return line;
+  }
+
+  static fromSvg(id: string, attrs: SvgAttrs): Line {
+    return new Line(id, attrs.number("x1"), attrs.number("y1"), attrs.number("x2"), attrs.number("y2"));
   }
 
   override get tag(): string {

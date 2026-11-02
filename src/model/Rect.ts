@@ -1,5 +1,6 @@
 import { ArgReader } from "./ArgReader.js";
 import { LeafShape } from "./LeafShape.js";
+import type { SvgAttrs } from "./SvgAttrs.js";
 
 export class Rect extends LeafShape {
   protected override readonly xKeys = ["x"];
@@ -15,6 +16,10 @@ export class Rect extends LeafShape {
     const rect = new Rect(id, reader.number(), reader.number(), reader.number(), reader.number(), reader.optionalText());
     reader.finish();
     return rect;
+  }
+
+  static fromSvg(id: string, attrs: SvgAttrs): Rect {
+    return new Rect(id, attrs.number("x"), attrs.number("y"), attrs.number("width"), attrs.number("height"));
   }
 
   override get tag(): string {

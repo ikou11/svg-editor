@@ -57,7 +57,7 @@ describe("ShapeFactory", () => {
 
   it("supports registering new types without touching existing code", () => {
     const custom = ShapeFactory.withBuiltins();
-    custom.register("dot", (id) => new Rect(id, 0, 0, 1, 1));
+    custom.register("dot", (id) => new Rect(id, 0, 0, 1, 1), (id) => new Rect(id, 0, 0, 1, 1));
     expect(custom.create("dot", "d", []).tag).toBe("rect");
   });
 
